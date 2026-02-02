@@ -191,3 +191,48 @@ def churn_prediction_pipeline():
             "n_customers": data_dict["n_customers"],
             "validation_passed": True,
         }
+
+    @task()
+    def engineer_features(df_dict):
+        from data_utils import get_config
+        from ml_pipeline import MLPipeline
+        import joblib
+        from pathlib import Path
+
+        df = pd.DataFrame(df_dict["data"])
+
+        config = get_config()
+        ml_pipeline = MLPipeline(config)
+
+        target_col = "Churn"
+        feature_set = ml_pipeline.engineer_features(df, fit=True, target_col=target_col)
+
+        X = feature_set.features.drop(
+            columns=[target_col, "CustomerID"], errors="ignore"
+        )
+        y = feature_set.features[target_col]
+
+        logging.info(
+            f"Feature engineering complete: {len(X.columns)} features created."
+        )
+
+        temp_dir = Path("/tmp/airflow_features")
+        temp_dir.mkdir(exist_ok=True)
+
+        X_path = temp_dir / "X_features.pkl"
+        y_path = temp_dir / "y_target.pkl"
+        transformers_path = temp_dir / "transformers.pkl"
+
+        joblib.dump(X, X_path)
+        joblib.dump(y, y_path)
+        joblib.dump(feature_set.transformers, transformers_path)
+
+        return {
+            "X_path": str(X_path),
+            "y_path": str(y_path),
+            "transformers_path": str(transformers_path),
+            "feature_name": list(X.columns),
+            "feature_metadata": feature_set.feature_metadata,
+            "n_samples": len(X),
+            "n_features": len(X.columns),
+        }
