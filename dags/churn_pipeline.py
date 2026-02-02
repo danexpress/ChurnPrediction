@@ -172,3 +172,22 @@ def churn_prediction_pipeline():
         logging.info(f"Missing values summary: \n{missing_percentage}")
 
         return df
+
+    @task()
+    def validate_data(data_dict):
+        from data_utils import validate_data
+
+        df = pd.DataFrame(data_dict["data"])
+
+        validation_result = validate_data(df)
+
+        if not validation_result.is_valid:
+            raise ValueError(f"Data validation failed: {validation_result.issues}")
+
+        logging.info(f"Data validation complete: {validation_result.summary}")
+
+        return {
+            "data": df.to_dict(orient="records"),
+            "n_customers": data_dict["n_customers"],
+            "validation_passed": True,
+        }
