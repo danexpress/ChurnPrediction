@@ -2,7 +2,7 @@ import sys
 
 sys.path.insert(0, "/usr/local/airflow/dags")
 
-from airflow.decorators import dag, task
+from airflow.sdk import dag, task
 from pendulum import datetime
 import pandas as pd
 from typing import Dict, Any
@@ -10,17 +10,17 @@ import logging
 
 
 @dag(
-    start_date=datetime(2026, 1, 30),
-    schedule_interval="@weekly",
+    start_date=datetime(2026, 2, 3),
+    schedule="@weekly",
     catchup=False,
     tags=["ml", "churn", "prediction", "ecommerce"],
     description="Production customer churn prediction pipeline with ML features",
 )
 def churn_prediction_pipeline():
     @task()
-    def load_ecommerce_data():
+    def load_ecommerce_data() -> Dict[str, Any]:
         try:
-            excel_path = "/usr/local/airflow/data/E commerce Dataset.xlsx"
+            excel_path = "/usr/local/airflow/dags/data/E Commerce Dataset.xlsx"
             sheet_name = "E Comm"
 
             logging.info(f"Loading data from {excel_path}...")
@@ -37,14 +37,14 @@ def churn_prediction_pipeline():
             )
 
             # ensure Churn column exists and properly formatted
-            if "Churn" not in df.columns:
+            if "Churn" in df.columns:
                 df["Churn"] = df["Churn"].astype(int)
                 churn_rate = df["Churn"].mean()
                 logging.info(
-                    f"Dataset loaded: {final_rows} rows, {churn_rate:.2f}% churn rate"
+                    f"Dataset loaded: {final_rows} rows, {churn_rate:.2%} churn rate"
                 )
             else:
-                logging.info("No 'Churn' column found in dataset")
+                logging.error("No 'Churn' column found in dataset")
                 return {"error": "No 'Churn' column found in dataset"}
 
             return {
@@ -56,7 +56,9 @@ def churn_prediction_pipeline():
         except Exception as e:
             logging.error(f"Error loading data: {e}")
 
-    def _clean_and_inpute_data(df: pd.DataFrame):
+            raise RuntimeError(f"Failed to load e-commerce dataset: {e}")
+
+    def _clean_and_impute_data(df: pd.DataFrame) -> pd.DataFrame:
         import numpy as np
 
         initial_rows = len(df)
@@ -66,20 +68,27 @@ def churn_prediction_pipeline():
         missing_percentage = (missing_summary / initial_rows * 100).round(2)
 
         for col in missing_summary[missing_summary > 0].index:
-            logging.info(f'Column "{col}" has {missing_summary[col]} missing values')
+            logging.info(
+                f'Column "{col}" has {missing_summary[col]} missing values ({missing_percentage[col]}%)'
+            )
 
-        # remove columns for target variable
+        # Remove rows where target variable is missing
         if "Churn" in df.columns:
-            df = df.drop(subset=["Churn"])
-            logging.info(f'Dropped column "Churn" because it is the target variable.')
+            before_drop = len(df)
+            df = df.dropna(subset=["Churn"])
+            # FIX #3: Corrected log message
+            logging.info(
+                f"Removed {before_drop - len(df)} rows with missing Churn values"
+            )
 
-        # Handle ID columns - remove the duplicates but keep the data
+        # Handle ID columns - remove duplicates but keep the data
         if "CustomerID" in df.columns:
             duplicated_ids = df.duplicated(subset=["CustomerID"], keep="first").sum()
             if duplicated_ids > 0:
+                # FIX #4: Corrected method name
                 df = df.drop_duplicates(subset=["CustomerID"], keep="first")
                 logging.info(
-                    f"Dropped {duplicated_ids} rows with duplicate CustomerID values."
+                    f"Removed {duplicated_ids} rows with duplicate CustomerID values"
                 )
 
         # Numerical imputation strategies
@@ -97,30 +106,34 @@ def churn_prediction_pipeline():
                 ]:
                     df[col] = df[col].fillna(df[col].median())
                 elif col in ["SatisfactionScore"]:
+                    # FIX #5: Added missing 'not'
                     df[col] = df[col].fillna(
-                        df[col].mode()[0] if df[col].mode().empty else 3
+                        df[col].mode()[0] if not df[col].mode().empty else 3
                     )
-                elif col in ["CashbackAmout", "OrderAmountHikeFromlastYear"]:
+
+                elif col in ["CashbackAmount", "OrderAmountHikeFromlastYear"]:
                     df[col] = df[col].fillna(0)
                 elif col in ["DaySinceLastOrder"]:
-                    median = df[col].median()
-                    df[col] = df[col].fillna(median if median < 10 else 10)
+
+                    median_val = df[col].median()
+                    df[col] = df[col].fillna(median_val)
                 else:
                     df[col] = df[col].fillna(df[col].median())
 
-                logging.info(f"Imputed {col} numerical")
+                logging.info(f"Imputed {col} (numerical)")
 
-        # 4. Categorical imputation strategies
+        # Categorical imputation strategies
         categorical_cols = df.select_dtypes(include=["object"]).columns.tolist()
         if "CustomerID" in categorical_cols:
             categorical_cols.remove("CustomerID")
 
         for col in categorical_cols:
             if df[col].isnull().sum() > 0:
+
                 if col in [
-                    "PreferredPayment",
+                    "PreferredPaymentMode",
                     "PreferredLoginDevice",
-                    "PreferredOrderCategory",
+                    "PreferedOrderCat",
                 ]:
                     mode_val = (
                         df[col].mode()[0] if not df[col].mode().empty else "Unknown"
@@ -137,9 +150,9 @@ def churn_prediction_pipeline():
                     )
                     df[col] = df[col].fillna(mode_val)
 
-                logging.info(f"Imputed {col} categorical")
+                logging.info(f"Imputed {col} (categorical)")
 
-        # chek for any remaining values in critical columns
+        # Check for any remaining missing values in critical columns
         critical_columns = ["Churn", "Tenure", "SatisfactionScore"]
         critical_missing = df[critical_columns].isnull().sum()
 
@@ -147,11 +160,12 @@ def churn_prediction_pipeline():
             before_critical_drop = len(df)
             df = df.dropna(subset=critical_columns)
             logging.info(
-                f"Dropped {before_critical_drop - len(df)} rows with missing critical values."
+                f"Removed {before_critical_drop - len(df)} rows with missing critical values"
             )
 
-        # Data validation and cleaning
-        outlier_columns = ["Tenure", "Cashback", "OrderCount"]
+        # Data validation and cleaning - remove outliers
+
+        outlier_columns = ["Tenure", "CashbackAmount", "OrderCount"]
         for col in outlier_columns:
             if col in df.columns:
                 Q1 = df[col].quantile(0.25)
@@ -163,18 +177,20 @@ def churn_prediction_pipeline():
                 outliers = ((df[col] < lower_bound) | (df[col] > upper_bound)).sum()
                 if outliers > 0:
                     df = df[(df[col] >= lower_bound) & (df[col] <= upper_bound)]
-                    logging.info(f"Dropped {outliers} outliers from column {col}.")
+                    logging.info(f"Removed {outliers} outliers from {col}")
 
         final_rows = len(df)
         retention_rate = (final_rows / initial_rows) * 100
 
-        logging.info(f"Data cleaning completed. {len(df)} rows remain after cleaning.")
-        logging.info(f"Missing values summary: \n{missing_percentage}")
+        logging.info(
+            f"Data cleaning completed: {final_rows}/{initial_rows} rows retained ({retention_rate:.1f}%)"
+        )
+        logging.info(f"Remaining missing values: {df.isnull().sum().sum()}")
 
         return df
 
     @task()
-    def validate_data(data_dict):
+    def validate_data(data_dict: Dict[str, Any]) -> Dict[str, Any]:
         from data_utils import validate_data
 
         df = pd.DataFrame(data_dict["data"])
@@ -184,7 +200,7 @@ def churn_prediction_pipeline():
         if not validation_result.is_valid:
             raise ValueError(f"Data validation failed: {validation_result.issues}")
 
-        logging.info(f"Data validation complete: {validation_result.summary}")
+        logging.info("Data validation passed successfully")
 
         return {
             "data": df.to_dict(orient="records"),
@@ -193,7 +209,7 @@ def churn_prediction_pipeline():
         }
 
     @task()
-    def engineer_features(df_dict):
+    def engineer_features(df_dict: Dict[str, Any]) -> Dict[str, Any]:
         from data_utils import get_config
         from ml_pipeline import MLPipeline
         import joblib
@@ -213,7 +229,7 @@ def churn_prediction_pipeline():
         y = feature_set.features[target_col]
 
         logging.info(
-            f"Feature engineering complete: {len(X.columns)} features created."
+            f"Feature engineering completed: {len(X.columns)} features created"
         )
 
         temp_dir = Path("/tmp/airflow_features")
@@ -231,77 +247,95 @@ def churn_prediction_pipeline():
             "X_path": str(X_path),
             "y_path": str(y_path),
             "transformers_path": str(transformers_path),
-            "feature_name": list(X.columns),
+            "feature_names": list(X.columns),
             "feature_metadata": feature_set.feature_metadata,
             "n_samples": len(X),
             "n_features": len(X.columns),
         }
 
     @task()
-    def train_models(feature_data):
+    def train_models(feature_data: Dict[str, Any]) -> Dict[str, Any]:
         from ml_pipeline import MLPipeline
         from data_utils import get_config
         import joblib
         from pathlib import Path
+        import math
 
         config = get_config()
         ml_pipeline = MLPipeline(config)
 
         X = joblib.load(feature_data["X_path"])
         y = joblib.load(feature_data["y_path"])
-        feature_names = joblib.load(feature_data["transformers_path"])
+
+        feature_names = feature_data["feature_names"]
 
         logging.info(
-            f"Loaded training data with {len(X)} samples and {len(X.columns)} features."
+            f"Loaded training data: {len(X)} samples, {len(X.columns)} features"
         )
 
+        # Load transformers (optional)
         try:
             transformers = joblib.load(feature_data["transformers_path"])
             ml_pipeline.transformers = transformers
         except Exception as e:
-            logging.warning(f"Failed to load transformers: {e} ")
+            logging.warning(f"Could not load transformers: {e}")
 
-            # train models
-            model_results = ml_pipeline.train_models(X, y, feature_names)
+        # Train models
+        model_results = ml_pipeline.train_models(X, y, feature_names)
 
-            best_model_name = max(
-                model_results.keys(),
-                key=lambda x: model_results[x].test_scores.get("roc_auc", 0),
-            )
+        # Select best model
+        best_model_name = max(
+            model_results.keys(),
+            key=lambda x: model_results[x].test_scores.get("roc_auc", 0),
+        )
 
-            best_result = model_results[best_model_name]
+        best_result = model_results[best_model_name]
 
-            # fallback
-            production_model_path = Path("models/production/churn_model.pkl")
-            transformers_path = Path("models/transformers/feature_transformers.pkl")
+        # Save model
+        production_model_path = Path("models/production/churn_model.pkl")
+        transformers_path = Path("models/transformers/feature_transformers.pkl")
 
-            ml_pipeline.save_model(
-                best_result, str(production_model_path), str(transformers_path)
-            )
+        ml_pipeline.save_model(
+            best_result, str(production_model_path), str(transformers_path)
+        )
 
-            logging.info(f"Best model saved to {production_model_path}")
-            logging.info(f"Transformers saved to {transformers_path}")
+        logging.info(
+            f"Best model ({best_model_name}) saved with ROC-AUC: {best_result.test_scores['roc_auc']:.4f}"
+        )
 
-            return {
-                "best_model_name": best_model_name,
-                "best_model_path": str(production_model_path),
-                "transformers_path": str(transformers_path),
-                "best_params": best_result.best_params,
-                "cv_scores": best_result.cv_scores,
-                "test_scores": best_result.test_scores,
-                "model_metrics": {
-                    k: float(v) if hasattr(v, "item") else v
-                    for k, v in best_result.test_scores.items()
-                },
-                "feature_importance": best_result.feature_importance.to_dict("records"),
-            }
+        # Clean feature importance for JSON serialization
+        feature_importance = best_result.feature_importance.copy()
+        feature_importance = feature_importance.replace(
+            {float("nan"): None, float("inf"): None, float("-inf"): None}
+        )
+
+        # Clean model metrics for JSON serialization
+        clean_metrics = {}
+        for k, v in best_result.test_scores.items():
+            if hasattr(v, "item"):
+                clean_metrics[k] = float(v)
+            elif isinstance(v, (int, float)):
+                if math.isnan(v) or math.isinf(v):
+                    clean_metrics[k] = None
+                else:
+                    clean_metrics[k] = float(v)
+            else:
+                clean_metrics[k] = v
+
+        return {
+            "best_model_name": best_model_name,
+            "model_path": str(production_model_path),
+            "transformers_path": str(transformers_path),
+            "model_metrics": clean_metrics,
+            "feature_importance": feature_importance.to_dict("records"),
+        }
 
     @task()
-    def register_model(training_result):
+    def register_model(training_result: Dict[str, Any]) -> Dict[str, Any]:
         from data_utils import register_model, promote_model
 
         model_version = register_model(
-            model_path=training_result["best_model_path"],
+            model_path=training_result["model_path"],
             model_name="churn_prediction",
             model_type=training_result["best_model_name"],
             metrics=training_result["model_metrics"],
@@ -311,13 +345,14 @@ def churn_prediction_pipeline():
             },
         )
 
-        roc_auc = training_result["test_scores"].get("roc_auc", 0)
+        # Promote to production if performance threshold is met
+        roc_auc = training_result["model_metrics"].get("roc_auc", 0)
         if roc_auc > 0.75:
             promote_model("churn_prediction", model_version, "production")
-            logging.info(f"Model promoted to production: {model_version}")
+            logging.info(f"Model version {model_version} promoted to production")
         else:
             logging.info(
-                f"Model not promoted to production because ROC AUC is {roc_auc:.2f} which is below the production threshold of 0.75"
+                f"Model version {model_version} registered but not promoted (ROC-AUC: {roc_auc:.4f})"
             )
 
         return {
@@ -326,12 +361,12 @@ def churn_prediction_pipeline():
             "model_metrics": training_result["model_metrics"],
         }
 
-    # task dependencies
+    # Task dependencies
     raw_data = load_ecommerce_data()
-    validate_data = validate_data(raw_data)
-    featured_engineering_data = engineer_features(validate_data)
-    training_result = train_models(featured_engineering_data)
-    model_registered = register_model(training_result)
+    validated_data = validate_data(raw_data)
+    features = engineer_features(validated_data)
+    training_result = train_models(features)
+    model_info = register_model(training_result)
 
 
-churn_prediction_dag = churn_prediction_pipeline()
+churn_prediction_pipeline()

@@ -1,24 +1,39 @@
+x-airflow-volumes: &airflow-volumes
+  - mlflow-artifacts:/mlflow-artifacts
+
 services:
+  scheduler:
+    volumes: *airflow-volumes
+
+  dag-processor:
+    volumes: *airflow-volumes
+
+  triggerer:
+    volumes: *airflow-volumes
+
   mlflow:
     image: python:3.11-slim
-    platform: linux/amd64
+    platform: linux/arm64
     environment:
       - GIT_PYTHON_REFRESH=quiet
+      - MLFLOW_ARTIFACT_UPLOAD_DOWNLOAD_TIMEOUT=600
     command: >
-      bash -c "pip install mlflow==2.9.2 psycopg2-binary boto3 &&
+      bash -c "pip install mlflow==3.6.0 psycopg2-binary boto3 &&
       mkdir -p /mlflow-artifacts &&
       chmod -R 777 /mlflow-artifacts &&
-      mlflow server --host 0.0.0.0 --port 5000 
-      --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow_db 
-      --default-artifact-root file:///mlflow/artifacts
+      mlflow server --host 0.0.0.0 --port 5001
+      --backend-store-uri postgresql://mlflow:mlflow@mlflow-db:5432/mlflow
+      --default-artifact-root /mlflow-artifacts
       --serve-artifacts
+      --allowed-hosts '*'
       "
     volumes:
-      - mlflow-artifacts:/mlflow/artifacts
+      - mlflow-artifacts:/mlflow-artifacts
     ports:
-      - 5001:5001
+      - '5001:5001'
     depends_on:
-      - mlflow-db
+      mlflow-db:
+        condition: service_healthy
     networks:
       - airflow
       - default
@@ -26,15 +41,15 @@ services:
 
   mlflow-db:
     image: postgres:16-alpine
-    platform: linux/amd64
+    platform: linux/arm64
     environment:
       - POSTGRES_USER=mlflow
       - POSTGRES_PASSWORD=mlflow
-      - POSTGRES_DB=mlflow_db
+      - POSTGRES_DB=mlflow
     volumes:
       - mlflow-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", 'pg_isready', '-U' , 'mlflow']
+      test: ["CMD", 'pg_isready', '-U', 'mlflow']
       interval: 5s
       retries: 5
     networks:
@@ -49,6 +64,6 @@ volumes:
 networks:
   airflow:
     external: true
-    name: churn-prediction_4aa337_airflow
+    name: churn-prediction_4031ac_airflow
   default:
-    name: churn-prediction_4aa337_default
+    name: churn-prediction_4031ac_default
