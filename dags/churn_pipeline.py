@@ -236,3 +236,62 @@ def churn_prediction_pipeline():
             "n_samples": len(X),
             "n_features": len(X.columns),
         }
+
+    @task()
+    def train_models(feature_data):
+        from ml_pipeline import MLPipeline
+        from data_utils import get_config
+        import joblib
+        from pathlib import Path
+
+        config = get_config()
+        ml_pipeline = MLPipeline(config)
+
+        X = joblib.load(feature_data["X_path"])
+        y = joblib.load(feature_data["y_path"])
+        feature_names = joblib.load(feature_data["transformers_path"])
+
+        logging.info(
+            f"Loaded training data with {len(X)} samples and {len(X.columns)} features."
+        )
+
+        try:
+            transformers = joblib.load(feature_data["transformers_path"])
+            ml_pipeline.transformers = transformers
+        except Exception as e:
+            logging.warning(f"Failed to load transformers: {e} ")
+
+            # train models
+            model_results = ml_pipeline.train_models(X, y, feature_names)
+
+            best_model_name = max(
+                model_results.keys(),
+                key=lambda x: model_results[x].test_scores.get("roc_auc", 0),
+            )
+
+            best_result = model_results[best_model_name]
+
+            # fallback
+            production_model_path = Path("models/production/churn_model.pkl")
+            transformers_path = Path("models/transformers/feature_transformers.pkl")
+
+            ml_pipeline.save_model(
+                best_result, str(production_model_path), str(transformers_path)
+            )
+
+            logging.info(f"Best model saved to {production_model_path}")
+            logging.info(f"Transformers saved to {transformers_path}")
+
+            return {
+                "best_model_name": best_model_name,
+                "best_model_path": str(production_model_path),
+                "transformers_path": str(transformers_path),
+                "best_params": best_result.best_params,
+                "cv_scores": best_result.cv_scores,
+                "test_scores": best_result.test_scores,
+                "model_metrics": {
+                    k: float(v) if hasattr(v, "item") else v
+                    for k, v in best_result.test_scores.items()
+                },
+                "feature_importance": best_result.feature_importance.to_dict("records"),
+            }
