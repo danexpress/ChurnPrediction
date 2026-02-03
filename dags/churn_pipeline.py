@@ -295,3 +295,43 @@ def churn_prediction_pipeline():
                 },
                 "feature_importance": best_result.feature_importance.to_dict("records"),
             }
+
+    @task()
+    def register_model(training_result):
+        from data_utils import register_model, promote_model
+
+        model_version = register_model(
+            model_path=training_result["best_model_path"],
+            model_name="churn_prediction",
+            model_type=training_result["best_model_name"],
+            metrics=training_result["model_metrics"],
+            metadata={
+                "feature_importance": training_result["feature_importance"],
+                "transformers_path": training_result["transformers_path"],
+            },
+        )
+
+        roc_auc = training_result["test_scores"].get("roc_auc", 0)
+        if roc_auc > 0.75:
+            promote_model("churn_prediction", model_version, "production")
+            logging.info(f"Model promoted to production: {model_version}")
+        else:
+            logging.info(
+                f"Model not promoted to production because ROC AUC is {roc_auc:.2f} which is below the production threshold of 0.75"
+            )
+
+        return {
+            "model_version": int(model_version),
+            "promoted_to_production": bool(roc_auc > 0.75),
+            "model_metrics": training_result["model_metrics"],
+        }
+
+    # task dependencies
+    raw_data = load_ecommerce_data()
+    validate_data = validate_data(raw_data)
+    featured_engineering_data = engineer_features(validate_data)
+    training_result = train_models(featured_engineering_data)
+    model_registered = register_model(training_result)
+
+
+churn_prediction_dag = churn_prediction_pipeline()
