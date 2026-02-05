@@ -1,45 +1,166 @@
-Overview
-========
+# 🧠 Churn Prediction Pipeline (Airflow + MLflow + PostgreSQL + MLOps)
 
-Welcome to Astronomer! This project was generated after you ran 'astro dev init' using the Astronomer CLI. This readme describes the contents of the project, as well as how to run Apache Airflow on your local machine.
+## 📌 Overview
+This repository contains a **production-grade churn prediction pipeline** built using:
 
-Project Contents
-================
+- **Apache Airflow** (orchestration)
+- **MLflow** (experiment tracking + model registry)
+- **PostgreSQL** (MLflow backend store)
+- **Pandas / Scikit-learn / Joblib** (feature engineering + model training)
+- **Custom data validation & ML pipeline modules**
 
-Your Astro project contains the following files and folders:
+The system runs on a weekly schedule and automates the full MLOps lifecycle:
 
-- dags: This folder contains the Python files for your Airflow DAGs. By default, this directory includes one example DAG:
-    - `example_astronauts`: This DAG shows a simple ETL pipeline example that queries the list of astronauts currently in space from the Open Notify API and prints a statement for each astronaut. The DAG uses the TaskFlow API to define tasks in Python, and dynamic task mapping to dynamically print a statement for each astronaut. For more on how this DAG works, see our [Getting started tutorial](https://www.astronomer.io/docs/learn/get-started-with-airflow).
-- Dockerfile: This file contains a versioned Astro Runtime Docker image that provides a differentiated Airflow experience. If you want to execute other commands or overrides at runtime, specify them here.
-- include: This folder contains any additional files that you want to include as part of your project. It is empty by default.
-- packages.txt: Install OS-level packages needed for your project by adding them to this file. It is empty by default.
-- requirements.txt: Install Python packages needed for your project by adding them to this file. It is empty by default.
-- plugins: Add custom or community plugins for your project to this file. It is empty by default.
-- airflow_settings.yaml: Use this local-only file to specify Airflow Connections, Variables, and Pools instead of entering them in the Airflow UI as you develop DAGs in this project.
+1. Load raw e-commerce customer data  
+2. Clean, impute, validate, and deduplicate records  
+3. Engineer ML features  
+4. Train multiple ML models  
+5. Select the best model based on ROC-AUC  
+6. Register & optionally promote the model in MLflow  
+7. Persist feature transformers and artifacts  
 
-Deploy Your Project Locally
-===========================
+This project demonstrates **real-world MLOps patterns** including reproducibility, automated data checks, 
+experiment tracking, outlier handling, and production model governance.
 
-Start Airflow on your local machine by running 'astro dev start'.
+---
 
-This command will spin up five Docker containers on your machine, each for a different Airflow component:
+## 🚀 Key Features
 
-- Postgres: Airflow's Metadata Database
-- Scheduler: The Airflow component responsible for monitoring and triggering tasks
-- DAG Processor: The Airflow component responsible for parsing DAGs
-- API Server: The Airflow component responsible for serving the Airflow UI and API
-- Triggerer: The Airflow component responsible for triggering deferred tasks
+### 🔹 **Automated Data Ingestion**
+- Reads Excel data stored in Airflow DAGs directory  
+- Logs row count, column summaries, and churn rate  
+- Robust error handling and missing data detection  
 
-When all five containers are ready the command will open the browser to the Airflow UI at http://localhost:8080/. You should also be able to access your Postgres Database at 'localhost:5432/postgres' with username 'postgres' and password 'postgres'.
+### 🔹 **Advanced Data Cleaning Pipeline**
+Includes:
+- Missing value imputation (median, mode, zero-fill, conditional strategies)  
+- Outlier removal using IQR thresholds  
+- Duplicate removal based on `CustomerID`  
+- Critical column enforcement (`Churn`, `Tenure`, `SatisfactionScore`)  
+- Column-level logging for traceability  
 
-Note: If you already have either of the above ports allocated, you can either [stop your existing Docker containers or change the port](https://www.astronomer.io/docs/astro/cli/troubleshoot-locally#ports-are-not-available-for-my-local-airflow-webserver).
+### 🔹 **Validation Layer**
+Before ML training, the pipeline:
+- Converts cleaned dict data into DataFrame  
+- Runs `validate_data()` for schema and quality verification  
+- Fails early on structural issues  
 
-Deploy Your Project to Astronomer
-=================================
+### 🔹 **Feature Engineering**
+Implements:
+- Config-driven transformations (scaling, encoding, derived features, etc.)  
+- Transformer persistence using Joblib  
+- Separation of predictors, target, and metadata  
+- Full logging of feature counts and names  
 
-If you have an Astronomer account, pushing code to a Deployment on Astronomer is simple. For deploying instructions, refer to Astronomer documentation: https://www.astronomer.io/docs/astro/deploy-code/
+### 🔹 **Model Training & Selection**
+- Trains multiple models using the custom `MLPipeline` class  
+- Computes metrics including ROC-AUC  
+- Selects the best-performing model  
+- Saves:
+  - Trained model
+  - Preprocessing transformers
+  - Feature importances
+  - Model metadata  
 
-Contact
-=======
+### 🔹 **MLflow Model Registry Automation**
+- Registers each trained model version  
+- Auto-promotes to production if ROC-AUC ≥ 0.75  
+- Logs metadata, metrics, and transformer paths  
 
-The Astronomer CLI is maintained with love by the Astronomer team. To report a bug or suggest a change, reach out to our support.
+---
+
+## 📂 Project Structure
+
+├── dags/
+│ ├── churn_prediction_pipeline.py # Main Airflow DAG
+│ ├── data/ # Input dataset
+│ ├── data_utils.py # Validation + config helpers
+│ └── ml_pipeline.py # ML workflow implementation
+├── models/
+│ ├── production/ # Production model artifacts
+│ └── transformers/ # Feature transformers
+└── README.md
+
+
+---
+
+## ▶️ How the DAG Works
+
+### **1️⃣ Load Data**
+
+
+load_ecommerce_data()
+
+- Reads Excel file  
+- Logs structure, missingness, and churn distribution  
+
+### **2️⃣ Validate Data**
+
+
+validate_data()
+
+- Checks schema, types, and completeness  
+
+### **3️⃣ Engineer Features**
+
+
+engineer_features()
+
+- Applies transformations  
+- Saves `X`, `y`, and transformers  
+
+### **4️⃣ Train Models**
+
+
+train_models()
+
+- Trains all configured models  
+- Selects best based on ROC-AUC  
+- Saves artifacts  
+
+### **5️⃣ Register & Promote**
+
+
+register_model()
+
+- Registers model to MLflow registry  
+- Auto-promotes if threshold met  
+
+---
+
+## 🧪 Example Output (Logs)
+- Rows before/after cleaning  
+- Outlier counts per feature  
+- Feature importance  
+- Best model name  
+- ROC-AUC score  
+- Model version + promotion status  
+
+---
+
+## 🛠 Requirements
+
+- Docker Compose environment with:
+  - Airflow
+  - MLflow server
+  - PostgreSQL
+- Python 3.10+  
+- Required Python libraries:
+  - pandas  
+  - numpy  
+  - scikit-learn  
+  - mlflow  
+  - joblib  
+
+---
+
+## 🎯 Future Enhancements
+- Add drift detection  
+- Add SHAP explainability  
+- Add batch inference DAG  
+- Add S3/GCS artifact storage  
+
+---
+
+## 📄 License
+MIT License
